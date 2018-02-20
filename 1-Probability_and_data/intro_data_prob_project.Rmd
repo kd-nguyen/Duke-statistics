@@ -18,10 +18,6 @@ library(dplyr)
 
 ### Load data
 
-Make sure your data and R Markdown files are in the same directory. When loaded
-your data file will be called `brfss2013`. Delete this note when before you submit 
-your work. 
-
 ```{r load-data}
 load("brfss2013.RData")
 ```
@@ -31,46 +27,288 @@ load("brfss2013.RData")
 * * *
 
 ## Part 1: Data
+The findings from this data can be generalized to all adults in the United States, since random sampling (through telephone) was used to find samples for the data. Due to it being a telephone survey, the study might be biased toward those that own telephones. Also, by restricting to those living in private residence or college housing, the study findings can only be generalized to those populations at the expense of other populations of interest, especially when those populations might be linked to high-risk behavior such as the homeless or those living in temporary housing.  
 
+Any correlation between variables found through analyzing the data should not be taken as causation, since an experiment was not designed and subjects were not randomly assigned to different groups of one variable. Hence, any difference observed between those groups might be caused by some other underlying difference(s) between them, and not directly by that variable itself.
 
 * * *
 
 ## Part 2: Research questions
 
-**Research quesion 1:**
+**Research quesion 1: What's the average height, weight, and BMI for each each group broken down by gender?**  
 
-**Research quesion 2:**
+Why this interests me: I'm in the process of losing weight, and would like to see how I fair (especially in BMI) compared to my male cohort. This helps me set a realistic goal for my weight loss.  
 
-**Research quesion 3:**
+**Research quesion 2: Is there any correlation between frequency of drinking soda and sugar-sweetened drink and one's BMI (when controlled by age and gender)?**  
+
+Why this interests me: I'm starting to cut down on soda to help me lose weight. I wonder if my previous habit of drinking a lot of soda could be linked to my being overweight.  
+
+**Research quesion 3: Is there any correlation between emotional support and life satisfaction (when controlled by age and gender)?**  
+
+Why this interests me: I think my social support is somewhat below average, and so is my life satisfaction. It's natural to think that there's a correlation between those two, and I want to find that out.  
 
 
 * * *
 
 ## Part 3: Exploratory data analysis
 
-NOTE: Insert code chunks as needed by clicking on the "Insert a new code chunk" 
-button (green button with orange arrow) above. Make sure that your code is visible
-in the project you submit. Delete this note when before you submit your work.
 
-**Research quesion 1:**
+**Research quesion 1: What's the average height, weight, and BMI for each each group broken down by gender?**  
+
+1. Select relevant columns (extra columns selected for second question) and remove rows with missing data
+```{r}
+brf1 <- brfss2013 %>%
+select(gender = 'sex', age = 'X_ageg5yr', weight = 'weight2', height = 'height3',
+      soda = 'ssbsugar', sugardrink = 'ssbfrut2') %>%
+na.omit()
+```
+
+2. Remove erroneous entries in weight column (those with '' or '.b') and convert weights in kg (those with the 9 in front) to lbs.
 
 ```{r}
+brf1 <- brf1 %>%
+filter(!(weight %in% c('', '.b')))
+brf1$weight <- droplevels(brf1$weight)
 
+brf1$weight <- with(brf1, as.numeric(levels(weight))[as.integer(weight)])
+brf1 <- brf1 %>%
+mutate(weight = ifelse(weight >= 9000, (weight - 9000)*2.2046, weight))
+```
+
+3. Overall weight distribution is skewed right (quite a few people very overweight), with the most common weight around 180 lbs.
+```{r}
+ggplot(brf1, aes(weight)) +
+geom_histogram(bins = 30)
+```
+
+4. Convert height from ft/inch (eg. 509 = 5 feet 9 inches) and cm (those with 9 in front) to inches. Also filter out heights that are clearly not possible for a US adult.
+
+```{r}
+brf1 <- brf1 %>%
+mutate(height = ifelse(height >= 9000, 
+                      (height - 9000) / 2.54,
+                      (height %/% 100) * 12 + height %% 100)) %>%
+filter(height > 30 & height < 96)
+```
+
+5. Height distribution of US adults is roughly symmetrical with most heights in the mid-60 inches.
+```{r}
+ggplot(brf1, aes(height)) +
+geom_histogram(bins = 30)
+```
+
+6. Plotting average height per age group (separating males and females) shows that those in their 20s and 30s are tallest, and height decreases when moving to older age groups. The graph also shows that females are roughly 6 inches shorter than males in the same age group.
+```{r}
+ggplot(brf1, aes(age, height, color = gender)) +
+stat_summary(aes(group = gender), geom = 'line', 
+             fun.y = mean) +
+stat_summary(aes(group = gender), geom = 'point', 
+             fun.y = mean) +
+scale_x_discrete(limits = rev(levels(brf1$age))) +
+coord_flip()
+```
+
+7. Plotting similar graph for weight shows that those in their 40s and 50s are heaviest, and weight decreases for those younger and older than that. On average, males are more than 30 pounds heavier than females in the same age group.
+```{r}
+ggplot(brf1, aes(age, weight, color = gender)) +
+stat_summary(aes(group = gender), geom = 'line', 
+             fun.y = mean) +
+stat_summary(aes(group = gender), geom = 'point', 
+             fun.y = mean) +
+scale_x_discrete(limits = rev(levels(brf1$age))) +
+coord_flip()
+```
+
+8. Plotting similar graph for BMI (weight * 703 / height^2) shows that those in their 50s have the highest BMI, and BMI decreases when moving to older and younger age groups. Also, males and females are closer together in BMI as they are in height and weight; this makes sense, as a man having the same BMI as a woman is likely to be taller, hence also heavier than the woman.
+
+More interestingly, the average US adult (of either gender) is overweight (BMI > 25) for all age groups!
+
+```{r}
+brf1 <- brf1 %>%
+mutate(bmi = weight * 703 / (height ^ 2))
+
+ggplot(brf1, aes(age, bmi, color = gender)) +
+stat_summary(aes(group = gender), geom = 'line', 
+             fun.y = mean) +
+stat_summary(aes(group = gender), geom = 'point', 
+             fun.y = mean) +
+annotate('point', x = 12, y = 29.2) +
+annotate('text', x = 11.7, y = 29.2, label = 'me') +
+scale_x_discrete(limits = rev(levels(brf1$age))) +
+coord_flip()
+```
+
+To avoid extreme values skewing the result, median BMI's were plotted for each age group and gender, and only those in the 18 and 24 age group have a median BMI that is not considered overweight, with females having a healthier BMI than males.
+
+```{r}
+ggplot(brf1, aes(age, bmi, color = gender)) +
+stat_summary(aes(group = gender), geom = 'line', 
+             fun.y = median) +
+stat_summary(aes(group = gender), geom = 'point', 
+             fun.y = median) +
+annotate('point', x = 12, y = 29.2) +
+annotate('text', x = 11.7, y = 29.2, label = 'me') +
+scale_x_discrete(limits = rev(levels(brf1$age))) +
+coord_flip()
+```
+
+9. Finally, to achieve the median BMI of the male cohort of my age (25 to 29 years old), I need to lose about 23 lbs.
+
+```{r}
+goal_bmi <- median((filter(brf1, age == 'Age 25 to 29'))$bmi)
+goal_weight <- goal_bmi * 70^2 / 703
+lbs_to_lose <- 202 - goal_weight
+lbs_to_lose
 ```
 
 
+**Research quesion 2: Is there any correlation between frequency of drinking soda and sugar-sweetened drink and one's BMI (when controlled by age and gender)?** 
 
-**Research quesion 2:**
+
+1. Convert survey results on frequency of soda drinking to a per-day basis. This is because the survey allows for answers on a per-day basis (those with 1 in front), per-week basis (those with 2 in front), and per-month basis (those with 3 in front), hence the need for a single consistent basis.
+```{r}
+per_day_convert <- function(drink){
+    switch(
+        drink %/% 100 + 1,
+        0,
+        drink %% 100,
+        (drink %% 100) / 7,
+        (drink %% 100) / 30
+        )
+}
+
+brf2 <- brf1 %>%
+mutate(soda_per_day = sapply(soda, per_day_convert))
+```
+
+2. Plotting distribution of frequency of drinking soda per day shows that most people don't drink soda, and for those that do, most drink less than once a day. There are value spikes at whole number values, likely due to people preferring to choose a convenient whole amount (eg. 2 times a day, 7 times a week, or 30 times a month) when estimating their frequency.
 
 ```{r}
+ggplot(brf2, aes(soda_per_day)) +
+geom_histogram(binwidth = 0.1) +
+coord_cartesian(xlim = c(0, 10)) +
+scale_x_continuous(breaks = 0:10, labels = 0:10)
+```
 
+3. When plotting number of times per day drinking soda vs BMI, there are no obvious relationship between the two variables. While the majority of people don't drink or drink very little soda, their BMIs are all over the place. In contrast, those who drink a lot of soda (including one who drinks 40 times a day!) surprising have quite normal BMI, hovering around 25 i.e. barely overweight!
+
+```{r}
+ggplot(brf2) +
+geom_point(aes(soda_per_day, bmi))
+```
+
+4. Plotting these 2 variables but broken down by age and gender shows similar graphs. This means that times drinking soda per day is not correlated with BMI, or that there might be some other factors (aside from gender and age) at play and needs to be controlled. In any case, times drinking soda per day is a poor predictor of BMI.
+
+```{r}
+brf2 %>%
+filter(gender == 'Male') %>%
+ggplot(aes(soda_per_day, bmi)) +
+geom_point(color = 'blue') +
+facet_wrap(~ age, nrow = 4)
+```
+
+```{r}
+brf2 %>%
+filter(gender == 'Female') %>%
+ggplot(aes(soda_per_day, bmi)) +
+geom_point(color = 'red') +
+facet_wrap(~ age, nrow = 4)
+```
+
+5. Similarly, when analyzing the relationship between BMI and number of sugar-sweetened drinks (beside soda) per day, the latter is a poor predictor of the former across all age groups and genders.
+
+
+```{r}
+brf2 <- brf2 %>%
+mutate(drinks_per_day = sapply(sugardrink, per_day_convert))
+
+ggplot(brf2) +
+geom_point(aes(drinks_per_day, bmi))
 ```
 
 
+```{r}
+brf2 %>%
+filter(gender == 'Male') %>%
+ggplot(aes(drinks_per_day, bmi)) +
+geom_point(color = 'blue') +
+facet_wrap(~ age, nrow = 4)
+```
 
-**Research quesion 3:**
 
 ```{r}
-
+brf2 %>%
+filter(gender == 'Female') %>%
+ggplot(aes(drinks_per_day, bmi)) +
+geom_point(color = 'red') +
+facet_wrap(~ age, nrow = 4)
 ```
+
+
+6. Lastly, when plotting times drinking soda per day and times drinking sugar-sweetened drinks per day, those that drink a lot of sugar naturally drink very little sugar-sweetened drinks beside that, and vice versa.
+
+```{r}
+ggplot(brf2, aes(soda_per_day, drinks_per_day)) +
+geom_point()
+```
+
+
+**Research quesion 3: Is there any correlation between emotional support and life satisfaction (when controlled by age and gender)?** 
+
+1. Select relavant columns and omit NA values
+```{r}
+brf3 <- brfss2013 %>%
+select(gender = 'sex', age = 'X_ageg5yr', support = 'emtsuprt', satisfaction = 'lsatisfy') %>%
+na.omit()
+```
+
+
+2. Plotting life satisfaction breakdown between males and females shows that they have similar levels of satisfaction.
+
+```{r}
+ggplot(data = brf3) +
+geom_bar(aes(x = gender, fill = satisfaction), position = 'fill') +
+ylab('proportion')
+```
+
+3. Plotting life satisfaction breakdown between age groups shows that those age 50 to 54 are the most dissatisfied, and satisfaction increases when moving to older and younger age groups.
+
+```{r}
+ggplot(data = brf3) +
+geom_bar(aes(x = age, fill = satisfaction), position = 'fill') +
+scale_x_discrete(limits = rev(levels(brf3$age))) +
+ylab('proportion') +
+coord_flip()
+```
+
+4. Plotting level of emotional support against life satisfaction shows that those who never or rarely receive emotional support are the most dissatisfied (with those rarely receiving support surprisingly less dissatisfied than those never receiving support). In contrast, those who usually or always receive emotional support are much more satisfied.
+
+```{r}
+ggplot(data = brf3) +
+geom_bar(aes(x = support, fill = satisfaction), position = 'fill') +
+scale_x_discrete(limits = rev(levels(brf3$support))) +
+ylab('proportion')
+```
+
+5. This relationship between emotional support and life satisfaction holds across genders and age groups.
+
+```{r}
+ggplot(data = brf3) +
+geom_bar(aes(x = support, fill = satisfaction), position = 'fill') +
+scale_x_discrete(limits = rev(levels(brf3$support))) +
+ylab('proportion') +
+facet_wrap(~ gender)
+```
+
+```{r}
+brf3 %>%
+filter(gender == 'Male') %>%
+ggplot() +
+geom_bar(aes(x = support, fill = satisfaction), position = 'fill') +
+scale_x_discrete(limits = rev(levels(brf3$support))) +
+ylab('proportion') +
+coord_flip() +
+facet_wrap(~ age, nrow = 4)
+```
+
 
