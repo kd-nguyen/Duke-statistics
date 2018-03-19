@@ -1,0 +1,169 @@
+---
+title: "Statistical inference with the GSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(reshape2)
+```
+
+### Load data
+
+Make sure your data and R Markdown files are in the same directory. When loaded
+your data file will be called `gss`. Delete this note when before you submit 
+your work. 
+
+```{r load-data}
+load("gss.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+
+The findings from this data can be generalized to all adults in the United States, since random sampling was used to find candidates for house interviews. More specifically, the survey uses cluster sampling to identify areas/clusters for canvas, and for each cluster, a stratified sample was taken with quotas based on sex, age, and employment status. As a result, the sampling method is multi-stage and is able to generalize to US adults with little bias due to demographic imbalance (due to the quota sampling) and without using as much resources compared to a simple random sample. As with all surveys, there is some non-response bias, but it was minimized by limiting canvas and interviews to after 3 pm on weekdays or during weekend or holidays*.
+
+Any correlation between variables found through analyzing the data should not be taken as causation, since an experiment was not designed and subjects were not randomly assigned to different groups of one variable. Hence, any difference observed between those groups might be caused by some other underlying differences between those groups, and not directly by that variable itself.
+
+\* Smith, T., Hout, M. and Marsden, P. (2018). General Social Survey, 1972-2012. [PDF] Inter-university Consortium for Political and Social Research, pp.2881-2882. Available at: https://www.icpsr.umich.edu/cgi-bin/file?comp=none&study=34802&ds=1&file_id=1136502&path= [Accessed 18 Mar. 2018].
+
+* * *
+
+## Part 2: Research question
+
+**Research question:** Are level of education (by highest degree obtained) and self-perceived social class dependent?
+
+**Why this interests me**: As a college graduate, I perceive myself as middle class due to my income level. However, I wonder if there's a dependence between education level and perceived social class, since I've been told that the more educated one is, the higher income one earns, and that might affect how one perceive his or her social class. Furthermore, a person who perceives him- or herself to belong to a lower social class might tend not to pursue higher education. 
+
+Therefore, if there's indeed no difference in proportion of perceived social class among different education levels, the survey finding can be used to dispute that claim or not.
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+
+**Research question:** Are level of education (by highest degree obtained) and perceived social class dependent?
+
+1) Select relevant columns and remove rows with missing data (*degree*: highest degree earned,  *class*: self-perceived social class). There was one person who answered 'No Class', which can be dropped from the data since this label provides no meaningful interpretation.
+
+```{r}
+gss1 <- gss %>%
+select(degree, class) %>%
+na.omit() %>%
+filter(class != 'No Class') %>%
+droplevels()
+```
+
+2) Plotting proportion of social class versus education level shows that at higher education levels, a larger portion of people perceives themselves as upper and middle class and a smaller portion perceives themselves as lower and working class. The greatest difference between (middle + upper) class and (lower + working) class is between those with junior college degrees and bachelor degrees.
+
+```{r}
+ggplot(gss1) +
+geom_bar(aes(x = degree, fill = class), position = 'fill') +
+ylab('proportion')
+```
+
+3) Calculating the perceived social class proportion for each education level reaches the same conclusion: in general, the more advanced the highest degree earned is, the higher proportions of perceived middle and upper class people and the lower proportions of perceived lower and working class people there are for that group.
+
+```{r}
+# Cell count table
+gss_table <- table(gss1$class, gss1$degree)
+gss_table
+```
+
+```{r}
+# Table of class proportion (relative to total people in each education level group)
+prop.table(gss_table, 2) * 100
+```
+
+* * *
+
+## Part 4: Inference
+
+## Hypothesis
+
+**H0:** there is no difference in social class self-perception across education levels
+
+**H1:** there is a difference in social class self-perception across education levels
+
+## Conditions
+
+**Independence condition**: Since the survey sample is randomly selected and composed of less than 10% of the US adult population (across all sub-groups), and we have no reason to believe that the answers from the people surveyed are significantly related, the independence condition for chi-square test is met.
+
+**Sample size condition**: Since the expected count for all counts under null hypothesis (see below) are all greater than 5, the sample size condition for chi-square test is met.
+
+```{r}
+row_sums <- margin.table(gss_table, 1)
+row_p <- row_sums / sum(gss_table)
+column_sums <- margin.table(gss_table, 2)
+expected_table <- outer(row_p, column_sums)
+expected_table
+```
+
+## Hypothesis testing method
+
+**Method**: Chi-square test for independence (between 2 categorical variables)
+
+**Why**: since both variables under study are categorical, a chi-square test is used to see if the proportion distribution of one variable changes across different levels of the second variable. If it does, the two variables are independent.
+
+**How**: under the null hypothesis, the two variables (class and education level) are independent. As a result, the proportions of perceived social class would be identical across education levels, and the difference between the survey proportions and the null-hypothesis proportions is represented by the chi-square test statistic. 
+
+A p-value is calculated from that chi-square value to show how likely the survey result would be obtained if the hypothesis is true, and if it's very unlikely (under 5% significance level), then the null hypothesis can be rejected. If not, we fail to reject the null hypothesis.
+
+## Result
+
+1) The observed proportions look to be much different than the expected proportions under the null hypothesis (no difference in social class self-perception across education levels), suggesting a low p-value and high likelihood of rejecting the null hypothesis.
+
+```{r}
+observed_counts <- as.data.frame(gss_table)
+observed_counts$type <- 'observed'
+observed_counts <- rename(observed_counts, class = Var1, degree = Var2, count = Freq)
+
+expected_counts <- melt(expected_table)
+expected_counts$type <- 'expected'
+expected_counts <- rename(expected_counts, class = Var1, degree = Var2, count = value)
+
+rbind(observed_counts, expected_counts) %>%
+ggplot() +
+geom_bar(aes(x = degree, y = count, fill = class), 
+         stat = 'identity', position = 'fill') +
+theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+ylab('proportion') +
+facet_wrap(~ type)
+```
+
+2) Calculating chi-square test-statistic gives a chi square value of 5830. Due to this very large chi square, its p-value (at 12 degrees of freedom) is virtually zero.
+
+```{r}
+chi_square <- sum((gss_table - expected_table)^2 / expected_table)
+chi_square
+```
+
+```{r}
+df <- (length(unique(gss1$class)) - 1) * (length(unique(gss1$degree)) - 1)
+df
+```
+
+```{r}
+pchisq(chi_square, df, lower.tail = FALSE)
+```
+
+## Conclusion
+
+Since the p-value of the chi-square test statistic is less than 0.05, the null hypothesis (there is no difference in social class self-perception across education levels) is rejected at 5% significance level. In other words, the survey data provide convincing evidence that social class self-perception is indeed different across education levels.
+
+
+
+
