@@ -1,0 +1,462 @@
+---
+title: "Modeling and prediction for movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(reshape2)
+```
+
+### Load data
+
+Make sure your data and R Markdown files are in the same directory. When loaded
+your data file will be called `movies`. Delete this note when before you submit 
+your work. 
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+# Part 1: Data
+Since the data is randomly sampled from movies produced and released before 2016, findings from the data could be generalized to movies produced and released in this period.
+
+However, since this was not an experiment (only an observational study) and no random assignment was used, we cannot draw any causal conclusion from the data. For example, we can conclude that all else being equal, a one point rise in critic score will predict a two point rise in audience score. However, since we did not actually fix other criteria to be equal (and it would be impossible to do so given that a movie can't have two different critic scores), we cannot state that the rise in critic score would cause a rise in audience score.
+
+* * *
+
+# Part 2: Research question
+**Research question**: how is the IMDB rating of a movie (released before 2016) correlated with other information of that movie, including:
+
+* Movie type, genre, run rime and MPAA rating
+* The month and year the movie and the DVD were released
+* The number of IMDB votes the movie received
+* The critics score of the movie on Rotten Tomatoes
+* Whether the movie was nominated for a best picture Oscar or has won one
+* Whether the movie featured one or more Oscar-winning actors, actresses and directors
+
+These correlations will be used to predict the IMDB rating of a random movie released in this period and the predicted rating will be compared with the actual rating of the movie.
+
+**Why this interests me**: as a movie-goer, I usually check a movie's rating on IMDB before considering watching the movie in theaters. Therefore, knowing the relationship between the rating and other factors will give me awareness on what is the best predictor(s) of that particular rating, so that I can judge whether that predictor is important to me or not.
+
+
+* * *
+
+# Part 3: Exploratory data analysis
+The response variable in this study is **imdb_rating**: the average IMDB rating of a movie. From the histogram of IMDB ratings of all sampled movies, the distribution of ratings is left-skewed: there are relatively high number of movies with low ratings. The summary statistics show an average rating of around 6.5 across all movies, and a median of 6.6. The lowest-rated movie (2008's Disaster Movie) in the sample earned 1.9, and the highest-rated movie (1974's The Godfather Part II) earned a 9.
+
+```{r}
+ggplot(movies, aes(imdb_rating)) +
+geom_histogram(bins = 30)
+```
+
+```{r}
+# Summary statistics of IMDB ratings of all sampled movies
+summary(movies$imdb_rating)
+```
+
+```{r}
+# Movies with lowest and highest IMDB ratings in the sample
+movies %>%
+select(title, thtr_rel_year, imdb_rating) %>%
+filter(imdb_rating == min(imdb_rating) | imdb_rating == max(imdb_rating))
+```
+
+## Preparing data
+1) We start by dropping factors that are clearly not relevant factors to the IMDB ratings such as the movie's title, the IMDB and Rotten Tomatoes' URLs of the movie (**title**, **imdb_url** and **rt_url** respectively). Rows with NA/missing values will also be dropped.
+
+```{r}
+movies <- movies %>%
+select(-one_of(c('title', 'imdb_url', 'rt_url'))) %>%
+na.omit()
+```
+
+2) Among the various rating and score factors, many of them are collinear and some are likely just proxy measurements of another factor that is compiled differently. For example:
+
+a) The audience score (**audience_score**) and the IMDB rating (**imdb_rating**) are highly correlated, and they might be representing very similar things without providing any additional insight
+
+b) The audience rating (**audience_rating**) is likely just the audience score or the IMDB rating expressed as a categorical factor, as the group with the 'Spilled' audience rating has a markedly lower IMDB rating than the 'Upright' group.
+
+c) Similarly, the critics' score (**critics_score**) and critics' rating (**critics_rating**) seem to express the same thing: those with 'Rotten' critics score are scored lower than those with 'Fresh' critic score, and similarly for 'Fresh' against 'Certified Fresh'. Therefore, the critics scores already provide enough information about the critical response of a movie.
+
+As a result, we will drop score and rating factors that have already been accounted for by other factors. This include **audience_score**, **audience_rating**, and **critics_rating**.
+
+```{r}
+# 2a: audience score collinear with IMDB rating
+ggplot(movies, aes(audience_score, imdb_rating)) +
+geom_jitter() +
+stat_smooth(method = 'lm', se = FALSE)
+```
+
+```{r}
+# 2b: audience rating collinear with IMDB rating
+ggplot(movies, aes(audience_rating, imdb_rating)) +
+geom_boxplot()
+```
+
+```{r}
+#2c: critics rating collinear with critics score
+ggplot(movies, aes(critics_rating, critics_score)) +
+geom_boxplot()
+```
+
+```{r}
+movies <- movies %>%
+select(-one_of(c('audience_score', 'audience_rating', 'critics_rating')))
+```
+
+3) Since there are many actors and , directors, and studios among the sampled movies (thus many factors when doing multiple regression), we only consider the actors, directors, and studios with very high average IMDB ratings for our regression analysis. To avoid influence of rare occurences, we only consider actors who appeared in 5 or more films, directors who directed 3 or more films, and studios that produced 5 or more films. For example, a director whose only film ever directed got a 9/10 rating (and thus not very representative of his/her work due to extremely low sample size) will not be considered when selecting highly-rated actors and directors.
+
+Among eligible actors, Christian Bale and Minnie Driver have average ratings markedly higher than the rest, similarly for Werner Herzog and Woody Allen as directors, and First Run Features and United Artists as studios. 
+
+```{r}
+# Highest-rated actors
+movies %>%
+select(actor1, actor2, actor3, actor4, actor5, imdb_rating) %>%
+melt(id.vars = 'imdb_rating', variable.name = 'actor_type', value.name = 'actor') %>%
+group_by(actor) %>%
+summarize(movies = n(), avg_rating = mean(imdb_rating)) %>%
+filter(movies >= 5) %>%
+arrange(desc(avg_rating)) %>%
+head()
+```
+
+```{r}
+# Highest-rated directors
+movies %>%
+select(director, imdb_rating) %>%
+group_by(director) %>%
+summarize(movies = n(), avg_rating = mean(imdb_rating)) %>%
+filter(movies >= 3) %>%
+arrange(desc(avg_rating)) %>%
+head()
+```
+
+```{r}
+# Highest-rated studios
+movies %>%
+select(studio, imdb_rating) %>%
+group_by(studio) %>%
+summarize(movies = n(), avg_rating = mean(imdb_rating)) %>%
+filter(movies >= 5) %>%
+arrange(desc(avg_rating)) %>%
+head()
+```
+
+Therefore, we will add 3 new factors (**featured_actor**, **featured_director**, and **featured_studio**) into the data to indicate whether a movie features those 2 highest-rated actors, directors, and studios respectively (if not, the cell will be labeled '.Neither'). These new factors will replace the original factors **actor1** to **actor5**, as well as **director** and **studio**, in the multiple regression analysis.
+
+```{r}
+movies$studio <- as.character(movies$studio)
+movies <- movies %>%
+mutate(featured_director = as.factor(ifelse(director != 'Werner Herzog' & director != 'Woody Allen', 
+                                            '.Neither', director)),
+      featured_studio = as.factor(ifelse(studio != 'First Run Features' & studio != 'United Artists', 
+                                            '.Neither', studio)))
+
+actors <- movies[c('actor1', 'actor2', 'actor3', 'actor4', 'actor5')]
+featured_actor <- apply(actors, 1, function(x) {
+    if('Minnie Driver' %in% x) {
+        return('Minnie Driver')
+    } else if('Christian Bale' %in% x) {
+        return('Christian Bale')
+    } else {
+        return('.Neither')
+    }})    
+movies$featured_actor <- as.factor(featured_actor)
+    
+movies <- movies %>%
+select(-one_of(c('actor1', 'actor2', 'actor3', 'actor4', 'actor5', 'director', 'studio')))
+```
+
+4) Since the number of theater/DVD release dates and years are too numerous, they are grouped into larger categories for more convenient analysis: days are grouped into beginning of month (days 1-10), middle (days 11-20), and end of month (days 21 to end); similarly, release years are grouped into decades (70s, 80s, 90s, 00s, and 10s).
+
+```{r}
+movies <- movies %>%
+mutate(thtr_rel_year = as.factor(ifelse(thtr_rel_year <= 1979, '70s',
+                             ifelse(thtr_rel_year <= 1989, '80s',
+                                   ifelse(thtr_rel_year <= 1999, '90s',
+                                         ifelse(thtr_rel_year <= 2009, '00s', '10s'))))),
+      dvd_rel_year = as.factor(ifelse(dvd_rel_year <= 1999, '90s',
+                           ifelse(dvd_rel_year <= 2009, '00s', '10s'))),
+      thtr_rel_day = as.factor(ifelse(thtr_rel_day >=21, '21 to end',
+                            ifelse(thtr_rel_day >= 11, '11 to 20', '1 to 10'))),
+      dvd_rel_day = as.factor(ifelse(dvd_rel_day >= 21, '21 to end',
+                            ifelse(dvd_rel_day >= 11, '11 to 20', '1 to 10'))))
+```
+
+```{r}
+movies$thtr_rel_year <- relevel(movies$thtr_rel_year, ref = '70s')
+movies$dvd_rel_year <- relevel(movies$dvd_rel_year, ref = '90s')
+movies$thtr_rel_day <- relevel(movies$thtr_rel_day, ref = '1 to 10')
+movies$dvd_rel_day <- relevel(movies$dvd_rel_day, ref = '1 to 10')
+```
+
+* * *
+
+# Part 4: Modeling
+## Predictor variable chosen for full multiple regression model
+* title_type: Type of movie (Documentary, Feature Film, TV Movie)
+* genre: Genre of movie (Action & Adventure, Comedy, Documentary, Drama, Horror, Mystery & Suspense, Other)
+* runte: Runtime of movie (in minutes)
+* mpaa_rating: MPAA rating of the movie (G, PG, PG-13, R, Unrated)
+* studio: Studio that produced the movie
+* thtr_rel_year: Decade in which the movie is released in theaters
+* thtr_rel_month: Month the movie is released in theaters
+* thtr_rel_day: Day of the month (beginning, middle, or end of month) the movie is released in theaters
+* dvd_rel_year: Decade in which the movie is released on DVD
+* dvd_rel_month: Month the movie is released on DVD
+* dvd_rel_day: Day of the month (beginning, middle, or end of month) the movie is released on DVD
+* imdb_num_votes: Number of votes on IMDB
+* critics_score: Critics score on Rotten Tomatoes
+* audience_score: Audience score on Rotten Tomatoes
+* best_pic_nom: Whether or not the movie was nominated for a best picture Oscar (no, yes)
+* best_pic_win: Whether or not the movie won a best picture Oscar (no, yes)
+* best_actor_win: Whether or not one of the main actors in the movie ever won an Oscar (no, yes) – note that this is not necessarily whether the actor won an Oscar for their role in the given movie
+* best_actress win: Whether or not one of the main actresses in the movie ever won an Oscar (no, yes) – not that this is not necessarily whether the actresses won an Oscar for their role in the given movie
+* best_dir_win: Whether or not the director of the movie ever won an Oscar (no, yes) – not that this is not necessarily whether the director won an Oscar for the given movie
+* top200_box: Whether or not the movie is in the Top 200 Box Office list on BoxOfficeMojo (no, yes)
+* featured_actor: Featured actor in the film, but only include top 2 highest-rated actors (Minnie Driver & Christian Bale). Movies without either or those 2 actors will be labeled '.Neither'
+* featured_director: Featured director in the film, but only include top 2 highest-rated directors (Werner Herzog & Woody Allen). Movies without either or those 2 directors will be labeled '.Neither'
+
+## Variables excluded from regression analysis
+* title: irrelevant to ratings
+* critics_rating: Categorical variable for critics rating on Rotten Tomatoes (Certified Fresh, Fresh, Rotten) - collinear with critics_score
+* audience_rating: Categorical variable for audience rating on Rotten Tomatoes (Spilled, Upright) - collinear with audience score
+* audience_score: Audience score on Rotten Tomatoes - collinear with IMDB rating
+* director: Director of the movie - simplified to featured_director variable
+* actor1-5: First-fifth main actor/actress in the abridged cast of the movie - simplified to featured_actor variable
+* imdb_url: Link to IMDB page for the movie - irrelevant to ratings
+* rt_url: Link to Rotten Tomatoes page for the movie - irrelevant to ratings
+
+## Model chosen
+A multiple regression model will be carried out between the response variable (imdb_rating), and the chosen predictors above.
+
+**Reason**: the regression coefficients/slopes of the response variable to each predictor will indicate how much the rating is expected to change when each predictor changes (assuming the linear relationship is significant). This can be used to predict the rating of a movie in this period using those coefficients from the model.
+
+## Full model
+After running multiple regression on all chosen predictors, the most significant predictors (those with low p-value and three stars at the end of the line in the summary report) are:
+
+* If the movie is an art house or international movie
+* Number of IMDB votes
+* Critics score
+
+Other factors with higher p-value but still significant (p < 0.05) are:
+
+* If the movie is a documentary
+* If the movie is a drama
+* If the movie is a musical or performing arts movie
+* The movie's runtime
+* If the DVD was released in the 2000s
+* If the movie was directed by Woody Allen
+
+Out of these significant predictors, all of them predict an increase in rating when the value of the predictor increases, except for the predictor of whether the DVD was released in the 2000s. In other words, all else being equal, a movie whose DVD was released in the 2000s is expected to have a lower rating than a movie whose DVD was released in the 1990s (default level) by 0.21 rating points (out of 10).
+
+The R-squared value of the multiple regression model is 0.68. This means that 68% of the variability in IMDB ratings can be explained by the multiple regression model with the chosen predictors. Furthermore, the p-value of F is almost zero, which means that the multiple regression model can predict IMDB ratings of a movie better than the average ratings of all movies in the sample alone. Summary of the full model as well as the default level of each categorical predictor are provided below.
+
+```{r}
+# Running full multiple regression model
+full_model <- lm(imdb_rating ~., data = movies)
+
+# Summary result of full model
+summary(full_model)
+```
+
+```{r}
+# Default level for each categorical predictor
+factored_columns <- movies[, sapply(movies, is.factor)]
+sapply(factored_columns, function(x){levels(x)[1]})
+```
+
+## Model selection
+**Choice of model**: forward selection using adjusted R-squared criteria
+
+**Reason**: since the number of significant predictors in the full model is much fewer than the total number of predictors, it is more convenient to start adding predictors until adjusted R-squared does not increase.
+
+```{r}
+all_predictors <- movies %>%
+select(-imdb_rating) %>%
+colnames()
+
+# Run multiple regression analysis of IMDB rating with a set of predictors, and return the adjusted R-squared value of the model
+lm_adj_r <- function(predictors){
+    variables <- paste('imdb_rating ~', paste(predictors, collapse = ' + '))
+    model <- do.call("lm", list(as.formula(variables), data=as.name("movies")))
+    return(summary(model)$adj.r.squared)
+}
+
+# Run multiple regression analysis of IMDB rating with different combinations of predictors, 
+# and return the maximum adjusted R-squared value across all combos as well as the index of the combo
+# with that highest adjusted R-squared. If none of the combo exceeds a specified adjusted R-squared threshold,
+# returns NULL.
+best_r2_and_index <- function(combos, r_threshold){
+    r_squares <- sapply(combos, lm_adj_r)
+    status <- paste(substring(combos[which.max(r_squares)], 4), ': R^2 =', max(r_squares))
+    if(all(r_squares < r_threshold)){
+        print(paste(status, '(lower than previous R-square, forward selection stops)'))
+        return(NULL)
+    } else{
+        print(status)
+        return(c(max(r_squares), which.max(r_squares)))
+    }}
+
+# Start with single predictor regression, select the predictor with highest R-squared value,
+# and add the remaining variables one at a time to the existing model along with
+# the first predictor. Then, select the variable with the highest adjusted R-squared value, and so on.
+# If none of the remaining variables does not result in a higher adjusted R-squared, stop the
+# forward selection and return the current best set of predictors.
+best_next_predictor <- function(base_p, next_p, r_threshold){
+    if(length(next_p) == 0){return(base_p)}
+    combos <- lapply(next_p, function(x){paste(c(base_p, x), collapse = ' + ')})
+    r2_and_index <- best_r2_and_index(combos, r_threshold)
+    if(is.null(r2_and_index)){return(base_p)}
+    best_r2 <- r2_and_index[1]
+    index <- r2_and_index[2]
+    base_p <- c(base_p, next_p[index])
+    next_p <- next_p[-index]
+    return(best_next_predictor(base_p, next_p, best_r2))
+}
+```
+
+## Result of model selection
+**Final predictors after forward selection** (sorted by order of selection; for categorical predictors, only some of the levels of the predictor are likely to be significant):
+
+* critics_score: Critics score on Rotten Tomatoes
+* imdb_num_votes: Number of votes on IMDB
+* genre: Genre of movie (Action & Adventure, Comedy, Documentary, Drama, Horror, Mystery & Suspense, Other)
+* dvd_rel_year: Decade in which the movie is released on DVD
+* runtime: Runtime of movie (in minutes)
+* featured_director: Featured director in the film, but only include top 2 highest-rated directors (Werner Herzog & Woody Allen). Movies without either or those 2 directors will be labeled '.Neither'
+* dvd_rel_month: Month the movie is released on DVD
+* best_pic_win: Whether or not the movie won a best picture Oscar (no, yes)
+* dvd_rel_day: Day of the month (beginning, middle, or end of month) the movie is released on DVD
+* top200_box: Whether or not the movie is in the Top 200 Box Office list on BoxOfficeMojo (no, yes)
+* thtr_rel_month: Month the movie is released in theaters
+* thtr_rel_year: Decade in which the movie is released in theaters
+
+Note that the forward selection model stops after **thtr_rel_year**, since the variable among the remaining ones that provides the maximum R-squared (**mpaa_rating**) still produce an R-squared that is lower than a model without it.
+
+```{r}
+print('Forward selection (using adjusted R-squared) begins: ')
+selected_predictors <- best_next_predictor(c(''), all_predictors, 0)[-1]
+```
+
+```{r}
+print(paste('Selected predictors (forward selection with adjusted R^2 criteria):', paste(selected_predictors, collapse = ', ')))
+```
+
+## Model diagnostics
+In the forward selection model, the first 6 selected predictors also match the significant predictors in the full model (**critics_score**, **imdb_num_votes**, **genre**, **dvd_rel_year**, **runtime**, **featured_director**). Some selected predictors, such as **genre**, have multiple levels (comedy, drama, etc.) that are significant in the full model.
+
+Furthermore, the latter half of the forward selection model also includes predictors that are insignificant in the full model, such as the release month of the DVD (**dvd_rel_month**) or whether the movie won an Oscar for best picture (**best_pic_win**). Since these predictors are not significant in the full model, it is no surprise that they were selected late during forward selection due to their lower contribution to adjusted R-squared. However, some discrepancy between significant predictors in the full model and selected predictors in the forward selection model is expected.
+
+When the selected model is reran against the response variable (**imdb_rating**), the previously-significant predictors in the full model are still significant in the selected model, except for the predictor of whether the movie was directed by Woody Allen, which now has a p-value of just slightly above 0.5. Again, some minor discrepancy between the full model and the selected model is expected.
+
+The selected model has a lower R-squared value than the full model (0.6772 vs 0.6817). This could be explained by the more predictors the full model has (more predictor means a higher R-squared). However, the adjusted R-squard value of the selected model is higher than the full model (0.6624 vs 0.6573). This makes sense, since the selected model only contains predictors that contribute significantly to the R-squared value, and not those with low contribution that incurs a penalty in the adjusted R-squared value in the full model.
+
+### Condition check
+**Linearity**: the plot of residuals vs predicted values show that the residuals are scattered randomly around the fitted value, which means that the relationship between the response variable and the predictors can be assumed as linear
+
+**Nearly normal residuals**: the histogram and normal probability plots show that the residual are roughly normally-distributed, with some outliers in the lower end of the distribution. Therefore, residuals can be assumed to be nearly normal.
+
+**Constant variability**: the plot of residuals vs predicted values show that the residuals have roughly constant variability across different levels of the fitted value (although some levels in the middle have rather high variability). Therefore, the constant variability of residuals for multiple regression is met.
+
+## Interpretation of model coefficients
+**For a numerical predictor** (such as **critics_score**): the coefficient (under the 'Estimate' column in the regression summary) means that the IMDB rating is expected to change by the value of that coefficient (0.023) when the predictor (critics' score) is one unit higher in value, given the other variables are held constant.
+
+**For a categorical predictor** (such as **genre(Art House & International)**): the coefficient means that the IMDB rating is expected to change by the value of that coefficient (0.68) when the predictor is at the indicated level compared to the default level of the predictor i.e. when a movie is an art house & international movie compared to an action & adventure movie, given the other variables are held constant
+
+```{r}
+# Rerun forward-selected model with response variable
+selected_model <- lm(imdb_rating ~ critics_score + imdb_num_votes + 
+                     genre + dvd_rel_year + runtime + featured_director + 
+                     dvd_rel_month + best_pic_win + dvd_rel_day + top200_box + 
+                     thtr_rel_month + thtr_rel_year, data = movies)
+```
+
+```{r}
+# Summary result of forward-selected model
+summary(selected_model)
+```
+
+```{r}
+# Plot of residuals vs fitted values
+ggplot(data = selected_model, aes(.fitted, .resid)) +
+geom_point() +
+geom_hline(yintercept = 0, linetype = 'dashed') +
+xlab('Fitted value') +
+ylab('Residuals')
+```
+
+```{r}
+# Histogram of residuals
+ggplot(data = selected_model, aes(.resid)) +
+geom_histogram(bins = 30) +
+xlab('Residuals')
+```
+
+```{r}
+# Normal probability plot of residuals
+ggplot(data = selected_model, aes(sample = .resid)) +
+stat_qq()
+```
+
+* * *
+
+# Part 5: Prediction
+
+Using the forward selected (based on adjusted R-squared criteria) model, the rating for the 2016 action film 'Deadpool' is predicted using the relevant predictors from the movie as determined from the forward selection (such as critics score, number of votes on IMDB, etc.)
+
+**Result**: from the predicted result, we are 95% confident that a movie with the characteristics of that of 'Deadpool' (critics score of 83, runtime of 108 minutes, etc.) will have an IMDB score between 6.53 to 9.14 on average, with the single point rating estimate of 7.84. The actual IMDB rating of 'Deadpool' is 8.0, so our prediction using the selected model is accurate for this case (since the true rating is within the prediction interval).
+
+**Reference of new data**: the critics score of 'Deadpool' is obtained from the Rotten Tomatoes website (1), the IMDB rating and number of votes are from the IMDB website (2), whether the movie was in the Top 200 box office list was determined from the BoxOfficeMojo website (3), and the rest of the data of the movie (runtime, genre, theater and DVD release dates, etc.) are taken from the Wikipedia page of the movie (4).
+
+(1) https://www.rottentomatoes.com/m/deadpool/
+
+(2) http://www.imdb.com/title/tt1431045/
+
+(3) http://www.boxofficemojo.com/alltime/world/ 
+
+(4) https://en.wikipedia.org/wiki/Deadpool_(film)
+
+```{r}
+deadpool <- data.frame(
+    critics_score = 83,
+    imdb_num_votes = 711130,
+    genre = 'Action & Adventure',
+    dvd_rel_year = '10s',
+    runtime = 108,
+    featured_director = '.Neither',
+    dvd_rel_month = 5,
+    best_pic_win = 'no',
+    dvd_rel_day = '1 to 10',
+    top200_box = 'yes',
+    thtr_rel_month = 2,
+    thtr_rel_year = '10s'
+)
+```
+
+```{r}
+# Predicting IMDb ratings (with prediction interval) of 'Deadpool'
+predict(selected_model, deadpool, interval = 'prediction')
+```
+
+* * *
+
+# Part 6: Conclusion
+From the movies dataset, we have built a forward-selected (using adjusted R-squared criteria) multiple regression model to predict a movie's IMDB rating from certain characteristics of the movie (its critics score, genre, runtime, etc.) The model is able to explain 67.7% of the variability in IMDB ratings among the movies in the dataset. When it is used to predict the IMDB rating of 'Deadpool', a 2016 action movie, the model was able to accurately predict its true rating.
+
+**Shortcomings**: since the model only accounts for 67.7% of the variability in ratings, there are still some unexplained variability that can impact the accuracy of the model's prediction. Therefore, additional predictors (such as the movie's grossing) can be added to the data to see if the model can be improved.
