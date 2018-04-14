@@ -7,3 +7,5 @@
 1-Probability_and_data/brfss2013.Rdata
 2-Statistical_Inference/GUlGIyIVEeibXAqbdRi4dA_1961d660221511e8adec01ed43a6d732_inf_for_categorical_data_Coursera.rmd.zip
 2-Statistical_Inference/Project/gss.Rdata
+*.Rdata
+1-Probability_and_data/selected_nzes2011.Rdata
